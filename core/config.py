@@ -152,3 +152,29 @@ GEMINI_CONFIG = {
     "temperature": 0.2, # Low temperature for factual, guideline-compliant outputs
     "max_tokens": 2048,
 }
+
+
+def save_gemini_api_key(key: str) -> bool:
+    """Persists the Gemini API key into the .env file and runtime config."""
+    clean_key = key.strip()
+    GEMINI_CONFIG["api_key"] = clean_key
+    os.environ["GEMINI_API_KEY"] = clean_key
+
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    try:
+        from dotenv import set_key
+        if not os.path.exists(env_path):
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={clean_key}\n")
+        else:
+            set_key(env_path, "GEMINI_API_KEY", clean_key)
+        return True
+    except Exception as e:
+        print(f"Error saving to .env: {e}")
+        try:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={clean_key}\n")
+            return True
+        except Exception:
+            return False
+

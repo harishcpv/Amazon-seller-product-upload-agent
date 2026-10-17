@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 # Import internal modules
-from core.config import APP_NAME, APP_TAGLINE, APP_VERSION, BRAND_PROFILE, GEMINI_CONFIG
+from core.config import APP_NAME, APP_TAGLINE, APP_VERSION, BRAND_PROFILE, GEMINI_CONFIG, save_gemini_api_key
 from ui.styles import apply_custom_styles, render_header
 from ui.step1_images import render_step1_images
 from ui.step2_seller_inputs import render_step2_seller_inputs
@@ -47,17 +47,17 @@ def init_session_state():
 
     if "seller_inputs" not in st.session_state:
         st.session_state.seller_inputs = {
-            "product_type": "Triply Stainless Steel Deep Kadhai with Lid",
+            "product_type": "",
             "material": "Stainless Steel (Triply 304 Food Grade)",
-            "sku": "MF-SS-KAD-24CM",
-            "price": 1899.0,
-            "mrp": 2799.0,
+            "sku": "MF-PROD-01",
+            "price": 1499.0,
+            "mrp": 2199.0,
             "quantity": 50,
-            "capacity": "2.5 Litres",
-            "dimensions": "28 x 25 x 12 cm",
-            "weight": "1.35 kg",
+            "capacity": "",
+            "dimensions": "",
+            "weight": "",
             "hsn": "73239390",
-            "guidance": "Focus on authentic Indian cooking, SAS triply technology, food-grade SS304 durability, induction readiness, and stay-cool handles."
+            "guidance": ""
         }
 
     if "generated_content" not in st.session_state:
@@ -143,7 +143,9 @@ def render_sidebar():
         )
         if key_input != st.session_state.gemini_api_key:
             st.session_state.gemini_api_key = key_input
-            st.toast("Gemini API Key updated!", icon="🔑")
+            if key_input.strip():
+                save_gemini_api_key(key_input.strip())
+            st.toast("Gemini API Key updated & saved to .env!", icon="🔑")
 
         if not st.session_state.gemini_api_key:
             st.caption("No key provided? No problem! The built-in Smart Heuristic Rule Engine will generate production listings automatically.")

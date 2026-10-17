@@ -64,6 +64,21 @@ def render_step3_ai_studio(session_state):
 
             session_state.generated_content = generated
             session_state.content_generated = True
+
+            # Synchronize detected visual attributes into seller inputs
+            if "material" in generated:
+                session_state.seller_inputs["material"] = generated["material"]
+            if "product_name" in generated and generated["product_name"]:
+                session_state.seller_inputs["product_type"] = generated["product_name"]
+            if "capacity" in generated:
+                session_state.seller_inputs["capacity"] = generated["capacity"]
+            if "dimensions" in generated:
+                session_state.seller_inputs["dimensions"] = generated["dimensions"]
+            if "item_weight" in generated:
+                session_state.seller_inputs["weight"] = generated["item_weight"]
+            if "suggested_hsn" in generated:
+                session_state.seller_inputs["hsn"] = generated["suggested_hsn"]
+
             st.success(f"Generated listing content via {generated.get('source', 'AI Agent')}!")
             st.rerun()
 

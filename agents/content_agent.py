@@ -1,8 +1,14 @@
 """Content & Attribute Generation Agent for Amazon AutoList Studio.
 
-Uses multimodal LLMs (Google Gemini API via google-genai) to analyze product photos
-and generate Amazon A9-optimized titles, 5 benefit-driven bullet points, rich descriptions,
-and backend search terms tailored for the 'Manasvini Fancy' brand profile.
+Performs Image-First AI Inspection on product photos to automatically generate:
+- Amazon A9-optimized titles
+- 5 benefit-driven bullet points
+- Rich HTML product descriptions
+- Backend search terms under 249 bytes
+- Extracted material, finish, shape, and HSN codes
+
+Supports both Google Gemini Multimodal Vision AI (when API key is present)
+and an intelligent Local Computer Vision Analyzer (inspecting pixels, color spectra, and silhouettes).
 """
 
 import os
@@ -11,47 +17,51 @@ import re
 from typing import Dict, Any, List, Optional
 from PIL import Image
 import io
+from dotenv import load_dotenv, set_key
 
 from core.config import BRAND_PROFILE, AMAZON_LIMITS, GEMINI_CONFIG
-from core.models import ProductIdentity, ProductDescription, ProductDetails, SafetyCompliance
+from agents.local_vision_analyzer import LocalVisionAnalyzer
 
+# Load environment
+load_dotenv()
 
-SYSTEM_PROMPT = """You are an elite Amazon e-commerce catalog specialist and A9 SEO optimization architect for the premium kitchenware brand "Manasvini Fancy".
-Your mission is to examine the provided product photo(s) and seller inputs, then generate a high-converting, policy-compliant Amazon product listing payload in strict JSON format.
+IMAGE_FIRST_SYSTEM_PROMPT = """You are an elite Amazon e-commerce catalog architect and A9 SEO taxonomist for the premium brand "Manasvini Fancy".
 
-AMAZON COMPLIANCE & A9 BEST PRACTICES:
-1. Title Formula:
-   [Brand Name: Manasvini Fancy] + [Material/Core Spec: e.g. Triply Stainless Steel / Heavy Pre-Seasoned Cast Iron] + [Product Type: e.g. Deep Kadhai / Frying Pan / Tawa] + [Key Differentiator / Capacity / Lid: e.g. with Stainless Steel Lid, 2.5 Litres, 24cm] + [Compatibility / Use: e.g. Induction & Gas Stove Friendly, Stay-Cool Handles]
-   - Title MUST be between 120 and 195 characters (Never exceed 200 characters).
-   - Capitalize first letter of every word (Title Case), do NOT use ALL CAPS.
-   - Prohibited words: DO NOT use "Best", "Sale", "Top Rated", "Free Shipping", "#1", or emojis.
+CRITICAL INSTRUCTION - IMAGE ANALYSIS FIRST:
+You are inspecting the provided product photograph(s). Your analysis MUST be driven 100% by what is visually shown in the image pixels.
+DO NOT use pre-conceived templates or assumptions.
+1. Visually identify the exact product (e.g. Copper Water Bottle, Brass Pooja Diya, Cast Iron Tawa, Chef Knife, Spice Container, Tea Kettle, Cookware Pan, Lunch Box, Coffee Mug, etc.).
+2. Visually identify the material (Pure Copper, Traditional Brass, Cast Iron, Stainless Steel, Wood, Glass, Ceramic, etc.).
+3. Visually identify the finish (Hammered, Mirror Polish, Matte Brushed, Pre-Seasoned, Antique Patina, etc.).
+4. Visually identify the shape, proportions, parts (lid, handle, rivets, spouts, stand, scale).
 
-2. Five Benefit-Driven Bullet Points:
-   - Exactly 5 bullet points.
-   - Format: Start EACH bullet point with a capitalized 2-4 word benefit in square brackets, followed by a colon and 2-3 detailed sentences.
-     Example: [TRIPLY FOOD-GRADE CRAFTSMANSHIP]: Engineered with SS304 inner food-safe layer, aluminum core for uniform heat transfer, and magnetic SS430 outer base.
-   - Bullet 1: Material, Construction & Food-Grade Durability.
-   - Bullet 2: Heat Distribution, Energy Efficiency & Thermal Retention.
-   - Bullet 3: Ergonomic Design, Stay-Cool Riveted Handles & Precision Lid.
-   - Bullet 4: Universal Stovetop & Cooktop Compatibility (Induction, Gas, Electric, Halogen).
-   - Bullet 5: Effortless Cleaning, Stain Resistance & Care Guidance.
-   - Each bullet point MUST be between 150 and 350 characters.
+AMAZON LISTING RULES:
+1. Product Title:
+   Formula: [Manasvini Fancy] + [Material] + [Product Type] + [Capacity / Dimensions] + [Key Visual Highlights & Compatibility]
+   - Must be between 100 and 195 characters (Never exceed 200 characters).
+   - Use Title Case. Never use ALL CAPS.
+   - Prohibited words: DO NOT use "Best", "Sale", "#1", "Free Shipping".
 
-3. Rich Product Description:
-   - 250-400 words structured with clean HTML tags (<p>, <b>, <ul>, <li>).
-   - Tell the story of "Manasvini Fancy" heritage, cooking experience, durability, and health advantages.
+2. Exactly 5 Benefit-Driven Bullet Points:
+   - Start EACH bullet point with a capitalized 2-4 word bracketed benefit, followed by colon:
+     Example: [TRIPLY THERMAL CRAFTSMANSHIP]: Built with authentic...
+   - Bullet 1: Material, Purity & Food-Grade Durability.
+   - Bullet 2: Core Utility, Thermal / Liquid Performance & Ergonomics.
+   - Bullet 3: Design Details, Handles, Lid, Seals & Aesthetic Finish.
+   - Bullet 4: Cooktop / Daily Use Versatility (Induction, Gas, On-The-Go, Home).
+   - Bullet 5: Effortless Cleaning, Maintenance & 1-Year Brand Guarantee.
 
-4. Backend Search Terms (Generic Keywords):
-   - High-intent search terms under 249 bytes (Amazon strict limit).
-   - Lowercase, separated ONLY by single space. No punctuation, no commas, no brand names, no duplicate words.
+3. Rich HTML Product Description:
+   - 250-400 words with <p>, <b>, <ul>, <li> tags tailored to this exact item.
 
-5. Extracted Product Details:
-   - Identify: material, color, finish_type, item_shape, capacity, item_weight, care_instructions.
+4. Backend Search Terms:
+   - High-volume search terms strictly under 249 bytes (no commas, space-separated, no brand names).
 
 OUTPUT FORMAT:
-Return ONLY valid raw JSON with this exact schema (no markdown fences, no explanatory text):
+Return ONLY valid JSON matching this schema (no markdown formatting, no code blocks):
 {
-  "title": "string",
+  "product_name": "Identified product name",
+  "title": "Full Amazon title",
   "bullet_1": "string",
   "bullet_2": "string",
   "bullet_3": "string",
@@ -65,8 +75,9 @@ Return ONLY valid raw JSON with this exact schema (no markdown fences, no explan
   "item_shape": "string",
   "capacity": "string",
   "item_weight": "string",
+  "dimensions": "string",
   "care_instructions": "string",
-  "suggested_hsn": "73239390"
+  "suggested_hsn": "string"
 }
 """
 
@@ -81,21 +92,28 @@ class ContentGenerationAgent:
     def generate_listing_content(
         self,
         images: List[Image.Image],
-        seller_inputs: Dict[str, Any],
+        seller_inputs: Optional[Dict[str, Any]] = None,
         user_guidance: str = ""
     ) -> Dict[str, Any]:
-        """Generates Amazon listing attributes via Gemini API or intelligent fallback engine."""
-        # Try Gemini API if key is present
-        if self.api_key and self.api_key.strip():
+        """Generates Amazon listing attributes strictly by analyzing the uploaded product photo(s)."""
+        inputs = seller_inputs or {}
+        active_images = [img for img in images if img is not None]
+
+        # 1. Try Gemini Multimodal Vision AI if API key is available
+        if self.api_key and self.api_key.strip() and active_images:
             try:
-                gemini_result = self._call_gemini_multimodal(images, seller_inputs, user_guidance)
+                gemini_result = self._call_gemini_multimodal(active_images, inputs, user_guidance)
                 if gemini_result:
                     return gemini_result
             except Exception as e:
-                print(f"[ContentAgent] Gemini API invocation error: {e}. Falling back to Smart Rule Engine.")
+                print(f"[ContentAgent] Gemini API invocation error: {e}. Falling back to Local Computer Vision.")
 
-        # Fallback to deterministic AI Rule Engine
-        return self._generate_intelligent_fallback(seller_inputs, user_guidance)
+        # 2. Local Computer Vision Analyzer (Inspects actual pixels, colors, and shape without API key)
+        if active_images:
+            return self._call_local_computer_vision(active_images[0], inputs, user_guidance)
+
+        # 3. Last-resort fallback if no image uploaded
+        return self._generate_default_fallback(inputs, user_guidance)
 
     def _call_gemini_multimodal(
         self,
@@ -103,44 +121,36 @@ class ContentGenerationAgent:
         seller_inputs: Dict[str, Any],
         user_guidance: str
     ) -> Optional[Dict[str, Any]]:
-        """Invokes the Google GenAI SDK (google-genai) with image parts and prompt."""
+        """Invokes Google Gemini 2.5 Flash with image bytes for deep visual recognition."""
         try:
             from google import genai
             from google.genai import types
 
             client = genai.Client(api_key=self.api_key.strip())
 
-            # Prepare contents: prompt + images
-            prompt_context = f"""
-SELLER PROVIDED VARIABLES:
-- Product Type / Keyword: {seller_inputs.get('product_type', 'Kitchen Cookware')}
-- Material Preference: {seller_inputs.get('material', 'Stainless Steel')}
-- SKU: {seller_inputs.get('sku', 'MF-SS-COOK-01')}
-- Selling Price: ₹{seller_inputs.get('price', 1899)} (MRP: ₹{seller_inputs.get('mrp', 2799)})
-- Package Dimensions: {seller_inputs.get('dimensions', '28 x 25 x 12 cm')}
-- Weight: {seller_inputs.get('weight', '1.35 kg')}
-- Capacity: {seller_inputs.get('capacity', '2.5 Litres')}
-- Custom Seller Guidance: {user_guidance or 'Focus on authentic Indian cooking, durability, and premium finish.'}
-- Target Brand: {self.brand}
+            prompt_text = f"""
+INSPECT THE ATTACHED PRODUCT PHOTO(S):
+- Brand Name: {self.brand}
+- Optional Seller Note: {user_guidance or 'Identify this product accurately from the photograph and produce a premium Amazon listing.'}
+- Target Marketplace: Amazon.in
+
+Please analyze the photo, determine what the product is, its material, finish, and produce the requested JSON listing payload.
 """
 
-            contents = [SYSTEM_PROMPT, prompt_context]
+            contents = [IMAGE_FIRST_SYSTEM_PROMPT, prompt_text]
 
-            # Add up to 3 key images for multimodal inspection
-            for i, img in enumerate(images[:3]):
-                if img is not None:
-                    # Resize thumbnail for fast multimodal transmission
-                    thumb = img.copy()
-                    thumb.thumbnail((1024, 1024))
-                    buf = io.BytesIO()
-                    thumb.save(buf, format="JPEG", quality=85)
-                    img_bytes = buf.getvalue()
-                    contents.append(
-                        types.Part.from_bytes(
-                            data=img_bytes,
-                            mime_type="image/jpeg"
-                        )
+            # Attach images as JPEG parts for multimodal inference
+            for img in images[:3]:
+                thumb = img.copy()
+                thumb.thumbnail((1200, 1200))
+                buf = io.BytesIO()
+                thumb.save(buf, format="JPEG", quality=90)
+                contents.append(
+                    types.Part.from_bytes(
+                        data=buf.getvalue(),
+                        mime_type="image/jpeg"
                     )
+                )
 
             model_id = GEMINI_CONFIG["default_model"]
             response = client.models.generate_content(
@@ -162,91 +172,56 @@ SELLER PROVIDED VARIABLES:
                 raw_text = raw_text[:-3]
 
             parsed = json.loads(raw_text.strip())
-            return self._validate_and_normalize_payload(parsed, seller_inputs)
+            return self._validate_and_normalize_payload(parsed)
 
         except Exception as e:
             print(f"[ContentAgent] Failed during Gemini multimodal call: {e}")
             return None
 
-    def _generate_intelligent_fallback(
+    def _call_local_computer_vision(
         self,
+        primary_image: Image.Image,
         seller_inputs: Dict[str, Any],
         user_guidance: str = ""
     ) -> Dict[str, Any]:
-        """High-converting, deterministic Amazon listing synthesis engine for Manasvini Fancy products."""
-        prod_type = seller_inputs.get("product_type", "Triply Stainless Steel Deep Kadhai with Lid").strip()
-        material = seller_inputs.get("material", "Stainless Steel (Triply 304 Food Grade)").strip()
-        capacity = seller_inputs.get("capacity", "2.5 Litres").strip()
-        sku = seller_inputs.get("sku", "MF-SS-KAD-24CM").strip()
-        weight = seller_inputs.get("weight", "1.35 kg").strip()
-        dim = seller_inputs.get("dimensions", "28 x 25 x 12 cm").strip()
+        """Runs local pixel and silhouette inspection when no API key is present."""
+        visual_data = LocalVisionAnalyzer.analyze_image(primary_image)
 
-        # Build Title according to Amazon A9 Formula
-        # Brand + Material + Type + Specs + Usability
-        title = f"{self.brand} {material} {prod_type} ({capacity}, {dim}) - Induction & Gas Compatible Heavy Gauge Cookware with Stay-Cool Handles"
-        if len(title) > 198:
-            title = title[:195] + "..."
+        # If user explicitly specified product_type hint in seller_inputs, blend it
+        if seller_inputs.get("product_type") and seller_inputs["product_type"] != "Triply Stainless Steel Deep Kadhai with Lid":
+            visual_data["product_type"] = seller_inputs["product_type"]
 
-        # Generate 5 Benefit-Driven Bullet Points
-        bullet_1 = f"[PREMIUM FOOD-GRADE CRAFTSMANSHIP]: Built with authentic {material} engineered for lifetime durability. Features a non-reactive inner cooking surface that preserves authentic flavors without leaching toxins or metallic tastes."
-        bullet_2 = f"[SUPERIOR TRIPLE-LAYER HEAT RETENTION]: Heavy encapsulated thermal base distributes heat evenly across the entire surface, eliminating hotspots and cooking your dishes up to 20% faster while saving fuel."
-        bullet_3 = f"[ERGONOMIC STAY-COOL RIVETED HANDLES]: Sturdy cast handles double-riveted with surgical-grade precision for an ultra-secure, comfortable grip even when bearing heavy gravies and curries."
-        bullet_4 = f"[ALL COOKTOP & INDUCTION FRIENDLY]: Seamlessly engineered for all heat sources including induction cooktops, gas stoves, ceramic, halogen, and oven-safe up to 260°C (500°F)."
-        bullet_5 = f"[EASY TO CLEAN & DISHWASHER SAFE]: Smooth mirror-finish surface resists stubborn burnt food residues and stains. Rinses effortlessly with mild soap or in the dishwasher for hassle-free maintenance."
+        listing = LocalVisionAnalyzer.generate_listing_from_visuals(visual_data, self.brand)
+        listing["detected_visuals"] = visual_data
+        return listing
 
-        # Generate Rich HTML Description
-        description = f"""<p><b>Elevate Your Culinary Experience with {self.brand}</b></p>
-<p>At <b>{self.brand}</b>, we believe that true kitchen mastery begins with exceptional cookware. The {self.brand} {prod_type} combines timeless Indian culinary tradition with state-of-the-art multi-layer thermal engineering. Whether you are searing spices, simmering rich curries, deep frying snacks, or preparing everyday family meals, this {prod_type.lower()} delivers unmatched consistency and thermal precision.</p>
-
-<p><b>Engineered for Health and Durability</b><br>
-Crafted from certified {material}, our cookware provides 100% toxin-free cooking with zero chemical coatings. The heavy base ensures uniform heat transfer, preventing scorching and preserving essential nutrients and rich aromas.</p>
-
-<p><b>Key Highlights:</b></p>
-<ul>
-  <li><b>Capacity:</b> {capacity} | <b>Dimensions:</b> {dim} | <b>Weight:</b> {weight}</li>
-  <li><b>Cooktop Versatility:</b> 100% Induction & Gas Stove Compatible</li>
-  <li><b>Handle Ergonomics:</b> Heat-resistant, heavy-duty double-riveted handles</li>
-  <li><b>Maintenance:</b> Dishwasher safe; easy hand-wash with gentle sponge</li>
-  <li><b>Backed by Manasvini Fancy Guarantee:</b> 1-Year Manufacturer Warranty</li>
-</ul>
-<p>Transform everyday cooking into a joyful culinary art. Add the <b>{self.brand} {prod_type}</b> to your kitchen today!</p>"""
-
-        # Generate Backend Search Terms (< 249 bytes)
-        raw_terms = f"stainless steel kadai triply deep fry pan induction bottom cooking utensils indian kitchenware {prod_type.lower()} heavy gauge cookware skillet pot with lid"
-        # Ensure under 249 bytes
-        search_terms = raw_terms[:245]
-
-        # Determine HSN code
-        hsn = "73239390"
-        if "cast iron" in material.lower():
-            hsn = "73239200"
-        elif "brass" in material.lower() or "copper" in material.lower():
-            hsn = "74181021"
-
+    def _generate_default_fallback(self, seller_inputs: Dict[str, Any], user_guidance: str) -> Dict[str, Any]:
+        """Basic fallback when neither images nor API key are available."""
+        prod = seller_inputs.get("product_type", "Premium Kitchen Cookware")
+        mat = seller_inputs.get("material", "Stainless Steel")
+        title = f"{self.brand} {mat} {prod} - Heavy Duty Induction Compatible Premium Cookware"
         return {
-            "title": title,
-            "bullet_1": bullet_1,
-            "bullet_2": bullet_2,
-            "bullet_3": bullet_3,
-            "bullet_4": bullet_4,
-            "bullet_5": bullet_5,
-            "description": description,
-            "search_terms": search_terms,
-            "material": material,
+            "title": title[:195],
+            "bullet_1": f"[PREMIUM FOOD-GRADE CRAFTSMANSHIP]: Built with authentic {mat} engineered for lifetime durability.",
+            "bullet_2": "[UNIFORM THERMAL DISTRIBUTION]: Heavy encapsulated thermal base eliminates hotspots for fast cooking.",
+            "bullet_3": "[ERGONOMIC SAFE HANDLES]: Sturdy cast handles double-riveted with surgical-grade precision.",
+            "bullet_4": "[ALL STOVETOP COMPATIBLE]: Works seamlessly on all heat sources including induction cooktops and gas stoves.",
+            "bullet_5": f"[EASY TO CLEAN & DISHWASHER SAFE]: Smooth mirror-finish surface. Backed by {self.brand} 1-Year Guarantee.",
+            "description": f"<p>Upgrade your kitchen with {self.brand} {prod}. Engineered from certified {mat} for daily cooking excellence.</p>",
+            "search_terms": f"{self.brand.lower()} {mat.lower()} {prod.lower()} kitchen dining cookware utensils",
+            "material": mat,
             "color": "Silver Mirror Polish",
-            "finish_type": "Mirror Polished Inner, Brushed Outer",
-            "item_shape": "Round Deep Kadhai",
-            "capacity": capacity,
-            "item_weight": weight,
-            "care_instructions": "Dishwasher Safe. Avoid harsh steel wool scrubbers.",
-            "suggested_hsn": hsn,
-            "source": "Smart Heuristic Rule Engine (Production Presets)"
+            "finish_type": "Mirror Finish",
+            "capacity": "Standard Size",
+            "item_weight": "1.2 kg",
+            "dimensions": "25 x 25 x 10 cm",
+            "suggested_hsn": "73239390",
+            "source": "Standard Preset Generator"
         }
 
-    def _validate_and_normalize_payload(self, data: Dict[str, Any], seller_inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_and_normalize_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Validates and enforces Amazon character limits and formatting on LLM outputs."""
         title = data.get("title", "")
-        # Ensure Brand name is at start of title
         if not title.startswith(self.brand):
             title = f"{self.brand} {title}"
         if len(title) > 200:
@@ -260,27 +235,26 @@ Crafted from certified {material}, our cookware provides 100% toxin-free cooking
             data.get("bullet_5", ""),
         ]
 
-        # Ensure bullet points have bracketed header
         normalized_bullets = []
         for i, b in enumerate(bullets):
             text = b.strip()
             if not text.startswith("["):
                 prefixes = [
                     "[PREMIUM CRAFTSMANSHIP]: ",
-                    "[UNIFORM HEAT DISTRIBUTION]: ",
-                    "[ERGONOMIC SAFE HANDLES]: ",
-                    "[ALL STOVETOP COMPATIBLE]: ",
-                    "[EASY CLEANING & CARE]: "
+                    "[SUPERIOR THERMAL PERFORMANCE]: ",
+                    "[ERGONOMIC SAFE DESIGN]: ",
+                    "[ALL COOKTOP COMPATIBILITY]: ",
+                    "[EASY CLEANING & MAINTENANCE]: "
                 ]
                 text = prefixes[i] + text
             normalized_bullets.append(text[:500])
 
         search_terms = data.get("search_terms", "")
-        # Strip punctuation and commas
         clean_terms = re.sub(r"[,\.\-\:\;]", " ", search_terms)
         clean_terms = " ".join(clean_terms.split())[:245]
 
         return {
+            "product_name": data.get("product_name", ""),
             "title": title,
             "bullet_1": normalized_bullets[0],
             "bullet_2": normalized_bullets[1],
@@ -289,13 +263,14 @@ Crafted from certified {material}, our cookware provides 100% toxin-free cooking
             "bullet_5": normalized_bullets[4],
             "description": data.get("description", ""),
             "search_terms": clean_terms,
-            "material": data.get("material", seller_inputs.get("material", "Stainless Steel")),
+            "material": data.get("material", "Stainless Steel"),
             "color": data.get("color", "Silver Mirror Finish"),
             "finish_type": data.get("finish_type", "Mirror Finish"),
             "item_shape": data.get("item_shape", "Round"),
-            "capacity": data.get("capacity", seller_inputs.get("capacity", "2.5 Litres")),
-            "item_weight": data.get("item_weight", seller_inputs.get("weight", "1.35 kg")),
+            "capacity": data.get("capacity", "Standard Size"),
+            "item_weight": data.get("item_weight", "1.2 kg"),
+            "dimensions": data.get("dimensions", "25 x 25 x 10 cm"),
             "care_instructions": data.get("care_instructions", "Dishwasher Safe"),
             "suggested_hsn": data.get("suggested_hsn", "73239390"),
-            "source": "Google Gemini Multimodal AI"
+            "source": "Google Gemini 2.5 Flash Multimodal Vision AI"
         }

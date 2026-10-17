@@ -36,12 +36,18 @@ def render_step2_seller_inputs(session_state):
         )
         inputs["product_type"] = product_type
 
-    with c2:
-        # Material selector
+        # Smart match detected material from AI
+        mat_val = inputs.get("material", "")
+        mat_idx = 0
+        for i, m_opt in enumerate(MATERIAL_PRESETS):
+            if any(term in m_opt.lower() for term in ["copper", "brass", "iron", "steel", "ceramic", "glass", "aluminium"] if term in mat_val.lower()):
+                mat_idx = i
+                break
+
         material = st.selectbox(
             "Primary Material *",
             options=MATERIAL_PRESETS,
-            index=0 if "Stainless Steel" in inputs.get("material", "") else 1,
+            index=mat_idx,
             help="High-grade materials used for Manasvini Fancy products"
         )
         inputs["material"] = material
