@@ -4,7 +4,20 @@ import streamlit as st
 from PIL import Image
 from typing import Dict, Any, Optional
 
-from core.config import IMAGE_CONFIG, BRAND_PROFILE, save_gemini_api_key
+from core.config import IMAGE_CONFIG, BRAND_PROFILE
+try:
+    from core.config import save_gemini_api_key
+except ImportError:
+    def save_gemini_api_key(key: str) -> bool:
+        import os
+        try:
+            env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={key.strip()}\n")
+            os.environ["GEMINI_API_KEY"] = key.strip()
+            return True
+        except Exception:
+            return False
 from agents.vision_agent import VisionBackgroundAgent
 from agents.content_agent import ContentGenerationAgent
 from agents.local_vision_analyzer import LocalVisionAnalyzer

@@ -21,8 +21,21 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Import internal modules
-from core.config import APP_NAME, APP_TAGLINE, APP_VERSION, BRAND_PROFILE, GEMINI_CONFIG, save_gemini_api_key
+from core.config import APP_NAME, APP_TAGLINE, APP_VERSION, BRAND_PROFILE, GEMINI_CONFIG
+
+try:
+    from core.config import save_gemini_api_key
+except ImportError:
+    def save_gemini_api_key(key: str) -> bool:
+        import os
+        try:
+            env_file = os.path.join(os.path.dirname(__file__), ".env")
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.write(f"GEMINI_API_KEY={key.strip()}\n")
+            os.environ["GEMINI_API_KEY"] = key.strip()
+            return True
+        except Exception:
+            return False
 from ui.styles import apply_custom_styles, render_header
 from ui.step1_images import render_step1_images
 from ui.step2_seller_inputs import render_step2_seller_inputs
