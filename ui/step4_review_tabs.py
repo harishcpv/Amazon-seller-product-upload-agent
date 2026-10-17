@@ -6,6 +6,7 @@ from typing import Dict, Any
 from core.models import CompleteListing, ProductIdentity, ProductDescription, ProductDetails, OfferPricing, SafetyCompliance
 from core.config import BRAND_PROFILE, HSN_CODES, MATERIAL_PRESETS, THEME_PRESETS, AUDIENCE_PRESETS
 from agents.prefill_agent import AttributePrefillerAgent
+from ui.live_pdp_preview import render_amazon_pdp_preview
 
 
 def render_step4_review_tabs(session_state):
@@ -252,5 +253,13 @@ def render_step4_review_tabs(session_state):
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Live Amazon Buyer Page Preview in Step 4
+    with st.expander("🛍️ Live Amazon Buyer Page Preview (Click to Expand / Collapse)", expanded=True):
+        render_amazon_pdp_preview(
+            listing=listing_obj,
+            processed_images=session_state.processed_images,
+            raw_images=session_state.raw_images
+        )
 
     st.markdown("</div>", unsafe_allow_html=True)

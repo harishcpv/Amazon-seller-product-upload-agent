@@ -2,26 +2,28 @@
 
 import streamlit as st
 import json
+import pandas as pd
 from typing import Dict, Any
 
 from export.flat_file_generator import AmazonFlatFileGenerator
 from export.zip_packager import ZipBundlePackager
 from export.sp_api_mock import AmazonSPAPIMockEngine
+from ui.live_pdp_preview import render_amazon_pdp_preview
 
 
 def render_step5_export_publish(session_state):
-    """Renders the Export Engine, ZIP packager, and SP-API upload simulation."""
+    """Renders the Live PDP Upload Preview, Export Engine, and SP-API push simulation."""
     st.markdown("""
     <div class="amazon-card">
         <div class="amazon-card-header">
             <div>
-                <h3 class="amazon-card-title">Step 5: Automated Upload & Export Engine</h3>
+                <h3 class="amazon-card-title">Step 5: Pre-Upload Visual Inspection & Export Engine</h3>
                 <div style="font-size: 0.85rem; color: #565959;">
-                    Generate ready-to-upload Amazon inventory flat files, package all 5 white-background images
-                    into a downloadable ZIP bundle, and simulate direct Amazon SP-API feed submission.
+                    Visually inspect how your product appears to Amazon shoppers (Live PDP Preview)
+                    and verify flat file data before downloading or pushing directly to Amazon.
                 </div>
             </div>
-            <span class="badge-success">Ready for Seller Central</span>
+            <span class="badge-success">Ready for Review & Publish</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -31,8 +33,37 @@ def render_step5_export_publish(session_state):
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
-    # Section 1: Summary Table
-    st.markdown("#### Product Listing Summary Dossier")
+    # Section 1: Pre-Upload Inspection Modes (Live PDP vs Raw Flat File Table)
+    st.markdown("### 🔍 Pre-Upload Inspection")
+    view_mode = st.radio(
+        "Choose Preview Mode:",
+        options=["🛍️ Live Amazon Buyer Page Preview (PDP Simulation)", "📊 Amazon Flat File Upload Table", "📄 JSON Metadata Spec"],
+        horizontal=True,
+        key="step5_preview_mode_selector"
+    )
+
+    if view_mode == "🛍️ Live Amazon Buyer Page Preview (PDP Simulation)":
+        render_amazon_pdp_preview(
+            listing=listing,
+            processed_images=session_state.processed_images,
+            raw_images=session_state.raw_images
+        )
+    elif view_mode == "📊 Amazon Flat File Upload Table":
+        st.markdown("#### Amazon Seller Central Upload Columns & Values")
+        flat_dict = AmazonFlatFileGenerator.generate_row_dict(listing)
+        df_preview = pd.DataFrame([
+            {"Technical Column": col, "Amazon Field Name": label, "Listing Value": flat_dict.get(col, "")}
+            for col, label in AmazonFlatFileGenerator.COLUMNS
+        ])
+        st.dataframe(df_preview, use_container_width=True, height=420)
+    else:
+        st.markdown("#### Complete Listing JSON Payload")
+        st.json(listing.model_dump())
+
+    st.markdown("---")
+
+    # Section 2: Summary Metrics
+    st.markdown("### 📦 Publish & Download Actions")
     summary = listing.get_summary_dict()
     sum_cols = st.columns(4)
     sum_cols[0].metric("Seller SKU", summary["SKU"])
@@ -42,7 +73,7 @@ def render_step5_export_publish(session_state):
 
     st.markdown("---")
 
-    # Section 2: Download Options (Flat File & ZIP Bundle)
+    # Section 3: Download Options (Flat File & ZIP Bundle)
     st.markdown("#### 1. Download Inventory Files & Image Assets")
     col_dl_zip, col_dl_tsv, col_dl_csv = st.columns(3)
 
@@ -100,7 +131,7 @@ def render_step5_export_publish(session_state):
 
     st.markdown("---")
 
-    # Section 3: Direct Amazon Selling Partner API (SP-API) Push Simulation
+    # Section 4: Direct Amazon Selling Partner API (SP-API) Push Simulation
     st.markdown("#### 2. Amazon SP-API Direct Publish Simulation")
     st.caption("Directly simulates the Amazon SP-API Listings Items API (<code>PUT /listings/2021-08-01/items/{sellerId}/{sku}</code>) with automated validation.")
 
@@ -145,7 +176,7 @@ def render_step5_export_publish(session_state):
         </div>
         """, unsafe_allow_html=True)
 
-    # Section 4: Developer & Headless Automation Script
+    # Section 5: Developer & Headless Automation Script
     with st.expander("View SP-API JSON Payload & Automated CLI Python Script"):
         tab_json, tab_py = st.tabs(["SP-API JSON Payload", "Automated Python Push Script"])
         with tab_json:
